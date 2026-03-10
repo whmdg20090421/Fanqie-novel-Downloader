@@ -1,31 +1,11 @@
-name: Build and Release
+name: Build and Release (Source Only)
 
 on:
   workflow_dispatch:
     inputs:
-      source_ref:
-        description: "私有源码分支 / Tag / Commit"
-        required: true
-        default: "main"
-        type: string
       publish_release:
         description: "是否创建 GitHub Release"
         required: true
-        default: true
-        type: boolean
-      platform_windows_x64:
-        description: "编译 Windows x64"
-        required: false
-        default: true
-        type: boolean
-      platform_linux_x64:
-        description: "编译 Linux x64"
-        required: false
-        default: true
-        type: boolean
-      platform_macos_x64:
-        description: "编译 macOS x64"
-        required: false
         default: true
         type: boolean
 
@@ -36,223 +16,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  PYTHON_VERSION: "3.11"
-  WINDOWS_WEBVIEW2_RUNTIME_VERSION: "145.0.3800.97"
-  PRIVATE_SOURCE_REPOSITORY: "POf-L/Fanqie-novel-Downloader-actions"
-  PRIVATE_SOURCE_PATH: "private-src"
-  PYTHONUTF8: "1"
-  PYTHONIOENCODING: "utf-8"
-
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      build_matrix: ${{ steps.platforms.outputs.build_matrix }}
-      build_count: ${{ steps.platforms.outputs.build_count }}
-      source_commit: ${{ steps.meta.outputs.source_commit }}
-      source_ref: ${{ steps.meta.outputs.source_ref }}
-      version: ${{ steps.meta.outputs.version }}
-      tag_name: ${{ steps.meta.outputs.tag_name }}
-    steps:
-      - name: Validate private source token
-        env:
-          PRIVATE_SOURCE_TOKEN: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
-        run: |
-          if [ -z "$PRIVATE_SOURCE_TOKEN" ]; then
-            echo "Missing repository secret: PRIVATE_SOURCE_TOKEN"
-            exit 1
-          fi
-
-      - name: Checkout private source
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ github.event.inputs.source_ref }}
-          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
-          path: ${{ env.PRIVATE_SOURCE_PATH }}
-          fetch-depth: 1
-
-      - name: Select build platforms
-        id: platforms
-        shell: python
-        env:
-          P_WIN: ${{ github.event.inputs.platform_windows_x64 }}
-          P_LIN: ${{ github.event.inputs.platform_linux_x64 }}
-          P_MAC: ${{ github.event.inputs.platform_macos_x64 }}
-        run: |
-          import json
-          import os
-
-          def to_bool(value: str) -> bool:
-              return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-          matrix = []
-          if to_bool(os.environ.get("P_WIN", "")):
-              matrix.append({
-                  "os": "windows-latest",
-                  "platform": "windows-x64-standalone",
-                  "binary_name": "TomatoNovelDownloader-Standalone-windows-x64",
-                  "artifact_name": "client-windows-x64-standalone",
-                  "bundle_webview2": True,
-                  "variant_label": "Standalone",
-                  "extension": ".exe",
-              })
-              matrix.append({
-                  "os": "windows-latest",
-                  "platform": "windows-x64-slim",
-                  "binary_name": "TomatoNovelDownloader-windows-x64",
-                  "artifact_name": "client-windows-x64-slim",
-                  "bundle_webview2": False,
-                  "variant_label": "Slim",
-                  "extension": ".exe",
-              })
-          if to_bool(os.environ.get("P_LIN", "")):
-              matrix.append({
-                  "os": "ubuntu-latest",
-                  "platform": "linux-x64",
-                  "binary_name": "TomatoNovelDownloader-linux-x64",
-                  "artifact_name": "client-linux-x64",
-                  "bundle_webview2": False,
-                  "variant_label": "Linux",
-                  "extension": "",
-              })
-          if to_bool(os.environ.get("P_MAC", "")):
-              matrix.append({
-                  "os": "macos-latest",
-                  "platform": "macos-x64",
-                  "binary_name": "TomatoNovelDownloader-macos-x64",
-                  "artifact_name": "client-macos-x64",
-                  "bundle_webview2": False,
-                  "variant_label": "macOS",
-                  "extension": "",
-              })
-
-          if not matrix:
-              raise SystemExit("请至少选择一个编译平台")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write(f"build_matrix={json.dumps({'include': matrix}, ensure_ascii=False, separators=(',', ':'))}\n")
-              fh.write(f"build_count={len(matrix)}\n")
-
-      - name: Build metadata
-        id: meta
-        shell: python
-        env:
-          SOURCE_REF: ${{ github.event.inputs.source_ref }}
-        run: |
-          import os
-          import subprocess
-          from datetime import datetime, timezone
-          from pathlib import Path
-
-          source_path = Path(os.environ.get("PRIVATE_SOURCE_PATH", "private-src"))
-          source_commit = subprocess.check_output(
-              ["git", "-C", str(source_path), "rev-parse", "--short", "HEAD"],
-              text=True,
-          ).strip()
-          version = datetime.now(timezone.utc).strftime("%Y.%m.%d.%H%M")
-          tag_name = f"v{version}"
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write(f"source_commit={source_commit}\n")
-              fh.write(f"source_ref={os.environ['SOURCE_REF']}\n")
-              fh.write(f"version={version}\n")
-              fh.write(f"tag_name={tag_name}\n")
-
-  build:
-    needs: prepare
-    if: needs.prepare.outputs.build_count != '0'
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
-    runs-on: ${{ matrix.os }}
-    name: Build ${{ matrix.platform }}
-    steps:
-      - name: Checkout private source
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ needs.prepare.outputs.source_ref }}
-          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
-          path: ${{ env.PRIVATE_SOURCE_PATH }}
-          fetch-depth: 1
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: |
-            ${{ env.PRIVATE_SOURCE_PATH }}/config/requirements.txt
-
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y libheif1 libheif-dev
-
-      - name: Install Python dependencies
-        working-directory: ${{ env.PRIVATE_SOURCE_PATH }}
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --prefer-binary pyinstaller
-          python -m pip install --prefer-binary -r config/requirements.txt
-
-      - name: Inject build version metadata
-        shell: python
-        env:
-          BUILD_VERSION: ${{ needs.prepare.outputs.version }}
-          PUBLIC_REPOSITORY: ${{ github.repository }}
-        run: |
-          from pathlib import Path
-          import os
-
-          source_path = Path(os.environ.get("PRIVATE_SOURCE_PATH", "private-src"))
-          version_py = source_path / "version.py"
-          version_py.write_text(
-              f"__version__ = \"{os.environ['BUILD_VERSION']}\"\n"
-              f"__github_repo__ = \"{os.environ['PUBLIC_REPOSITORY']}\"\n",
-              encoding="utf-8",
-          )
-          print(f"Injected {version_py}")
-
-      - name: Prepare bundled WebView2 runtime
-        if: ${{ runner.os == 'Windows' && matrix.bundle_webview2 }}
-        run: |
-          python private-src/tools/fetch_webview2_runtime.py --output-dir private-src/webview2_runtime --version "${{ env.WINDOWS_WEBVIEW2_RUNTIME_VERSION }}"
-
-      - name: Build executable
-        working-directory: ${{ env.PRIVATE_SOURCE_PATH }}
-        run: |
-          python tools/build_app.py --variant release --name "${{ matrix.binary_name }}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ env.PRIVATE_SOURCE_PATH }}/dist/${{ matrix.binary_name }}${{ matrix.extension }}
-          if-no-files-found: error
-          retention-days: 30
-
-  # 新增：打包 Python 源码为 ZIP
   package-source:
     runs-on: ubuntu-latest
-    needs: prepare
     steps:
-      - name: Checkout private source
+      - name: Checkout current repository (public code)
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.PRIVATE_SOURCE_REPOSITORY }}
-          ref: ${{ needs.prepare.outputs.source_ref }}
-          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
-          path: ${{ env.PRIVATE_SOURCE_PATH }}
           fetch-depth: 1
 
       - name: 打包 Python 源码为 ZIP
-        working-directory: ${{ env.PRIVATE_SOURCE_PATH }}
         run: |
-          zip -r ../Fanqie-novel-source.zip . -i "*.py" "config/" "README.md" "tools/"
+          zip -r Fanqie-novel-source.zip . -i "*.py" "*.md" "config/" "tools/"
 
       - name: 上传源码 ZIP 作为构建产物
         uses: actions/upload-artifact@v4
@@ -266,48 +41,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.event.inputs.publish_release == 'true'
         with:
+          tag_name: v${{ github.run_number }}
+          name: Fanqie-novel Source ${{ github.run_number }}
           files: Fanqie-novel-source.zip
 
-  release:
-    needs: [prepare, build, package-source]
-    if: ${{ github.event.inputs.publish_release == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download built artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          pattern: client-*
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag_name }}
-          name: Fanqie Client ${{ needs.prepare.outputs.version }}
-          generate_release_notes: true
-          files: release-assets/*
-          body: |
-            Built from private source repository `${{ env.PRIVATE_SOURCE_REPOSITORY }}`.
-
-            - Source ref: `${{ needs.prepare.outputs.source_ref }}`
-            - Source commit: `${{ needs.prepare.outputs.source_commit }}`
-            - Public workflow run: `${{ github.run_id }}`
-
   summary:
-    needs: [prepare, build, package-source, release]
+    needs: package-source
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Workflow summary
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ## Build Summary
-
-          - Private source repo: `${{ env.PRIVATE_SOURCE_REPOSITORY }}`
-          - Source ref: `${{ needs.prepare.outputs.source_ref }}`
-          - Source commit: `${{ needs.prepare.outputs.source_commit }}`
-          - Version: `${{ needs.prepare.outputs.version }}`
-          - Tag: `${{ needs.prepare.outputs.tag_name }}`
-          - Publish release: `${{ github.event.inputs.publish_release }}`
-          EOF
+          echo "✅ 源码打包完成" >> "$GITHUB_STEP_SUMMARY"
+          echo "📦 产物: Fanqie-novel-source.zip" >> "$GITHUB_STEP_SUMMARY"
