@@ -235,8 +235,41 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # 新增：打包 Python 源码为 ZIP
+  package-source:
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_SOURCE_REPOSITORY }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+          path: ${{ env.PRIVATE_SOURCE_PATH }}
+          fetch-depth: 1
+
+      - name: 打包 Python 源码为 ZIP
+        working-directory: ${{ env.PRIVATE_SOURCE_PATH }}
+        run: |
+          zip -r ../Fanqie-novel-source.zip . -i "*.py" "config/" "README.md" "tools/"
+
+      - name: 上传源码 ZIP 作为构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fanqie-novel-source
+          path: Fanqie-novel-source.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 上传源码 ZIP 到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.event.inputs.publish_release == 'true'
+        with:
+          files: Fanqie-novel-source.zip
+
   release:
-    needs: [prepare, build]
+    needs: [prepare, build, package-source]
     if: ${{ github.event.inputs.publish_release == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -262,7 +295,7 @@ jobs:
             - Public workflow run: `${{ github.run_id }}`
 
   summary:
-    needs: [prepare, build, release]
+    needs: [prepare, build, package-source, release]
     if: always()
     runs-on: ubuntu-latest
     steps:
